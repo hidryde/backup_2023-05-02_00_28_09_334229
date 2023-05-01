@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+
+import os
+from github import Github
+from datetime import datetime
+from github import GithubException
+from tqdm import tqdm
+
+def delete_file(file_name):
+    """Delete a file."""
+    if os.path.isfile(file_name):
+        os.remove(file_name)
+        print(f"Deleted {file_name}")
+    else:
+        print(f"Error: {file_name} not found")
+
+def delete_dir(dir_name):
+    """Delete a directory."""
+    if os.path.isdir(dir_name):
+        os.rmdir(dir_name)
+        print(f"Deleted {dir_name}")
+    else:
+        print(f"Error: {dir_name} not found")
+
+now = str(datetime.now())
+# replace the colon with underscore
+now = now.replace(":", "_")
+# replace the space with underscore
+now = now.replace(" ", "_")
+# replace the dot with underscore
+now = now.replace(".", "_")
+
+# check if the .ini files are present or not
+if os.path.isfile('reponame.ini'):
+    print("reponame.ini file found")
+else:
+    print("reponame.ini file not found")
+    print("Creating reponame.ini file")
+    with open('reponame.ini', 'w') as f:
+        f.write("")
+
+if os.path.isfile('profile.ini'):
+    print("profile.ini file found")
+else:
+    print("profile.ini file not found")
+    print("Creating profile.ini file")
+    with open('profile.ini', 'w') as f:
+        f.write("")
+
+# read the profile.ini for the username and password
+with open('profile.ini', 'r') as f:
+    profile = f.read().splitlines()
+
+# check whether the profile.ini is empty or not
+if len(profile) == 0:
+    print("No username and password found in profile.ini")
+    exit()
+else:
+    print("Username and password found in profile.ini")
+    print("Using the username and password from profile.ini")
+
+username = profile[0]
+password = profile[1]
+access_token = profile[2]
+
+# Set up the PyGithub object with your GitHub credentials
+g = Github(username, password)
+g = Github(access_token, timeout=3000)
+
+# Define the name of the repository you want to backup to
+# read the reponame.ini and find out the list of reponames
+with open('reponame.ini', 'r') as f:
+    repo_name = f.read().splitlines()
+
+# check whether the reponame list is empty
+if len(repo_name) == 0:
+    print("No repository name found in reponame.ini")
+    print("Adding a default repository name")
+    repo_name = f"backup_{now}"
+    with open('reponame.ini', 'w') as f:
+        f.write(repo_name)
+else:
+    print("Repository name found in reponame.ini")
+    print("Using the repository name from reponame.ini")
+
+print(f"Repository names: {repo_name}")
+# Get the path of the current directory
+backup_dir = os.getcwd()
+backup_dir = f'{backup_dir}/backup'
+# check whether the backup directory exists or not
+if os.path.isdir(backup_dir):
+    print("Backup directory found")
+else:
+    print("Backup directory not found")
+    print("Creating backup directory")
+    os.mkdir(backup_dir)
+
+# Get the user associated with the credentials
+user = g.get_user()
+
+repo_list = repo_name
+repo_name = repo_name[-1]
+
+# Try to get an existing repository with the specified name
+try:
+    repo = user.get_repo(repo_name)
+    print(f"Using existing repository {repo_name}...")
+except:
+    # If the repository does not exist, create a new one
+    print(f"Creating new repository {repo_name}...")
+    repo = user.create_repo(repo_name)
+    print(f"Repository {repo_name} created!")
+
+# Create a README file and push it to the repository
+readme_content = "This repository is a backup of my local files."
+try:
+    repo.create_file("README.md", "Adding README", readme_content)
+    print("README file created and pushed to the repository.")
+except Exception as e:
+    print(f"Error: Failed to create README file. {e}")
+
+# Recursively walk through the backup directory and upload all files
+for root, dirs, files in os.walk(backup_dir):
+    # check if it is a subdirectory or not
+    if root == backup_dir:
+        path = os.path.join(root.replace(f"{backup_dir}", ""))
+    else:
+        path = os.path.join(root.replace(f"{backup_dir}/", ""))
+    print('Uploading on folder : ',path)
+    # Upload all files in the current directory to the repository
+    for file in tqdm(files, desc=f"Uploading files in {root}"):
+        
+        file_path = os.path.join(root, file)
+        print(f'Uploading {file_path} in {path}')
+        print(file_path)
+        with open(file_path, "rb") as f:
+            content = f.read()
+    
+        # Check if the file already exists in the repository
+        try:
+            path = os.path.join(root.replace(f"{backup_dir}", ""), file)
+            # check if folder is not hidden
+            if path.startswith('.'):
+                continue
+            # print('Printing Path : ',path)
+            existing_file = repo.get_contents(path)
+            # Update the existing file with the new content
+            repo.update_file(existing_file.path, f"Updating {file}", content, existing_file.sha)
+            print(f"Updated {path} in repository '{repo_name}'")
+            # delete the file from the backup directory
+            delete_file(file_path)
+        except GithubException as e:
+            if e.status == 404:
+                # File does not exist in the repository, create a new file
+                repo.create_file(path, f"Adding {file}", content)
+                print(f"Added {path} to repository '{repo_name}'")
+                # delete the file from the backup directory
+                delete_file(file_path)
+            else:
+                print(f"Error: Failed to add {path} to repository '{repo_name}'. {e}")
+
+# Recursively walk through the backup directory and delete all empty directories
+for root, dirs, files in os.walk(backup_dir):
+    for dir in dirs:
+        dir_path = os.path.join(root, dir)
+        # check whether the directory is empty or not
+        if not os.listdir(dir_path):
+            # delete the directory
+            delete_dir(dir_path)
+            print(f"Deleted {dir_path}")
+        else:
+            print(f"Error: {dir_path} is not empty")
